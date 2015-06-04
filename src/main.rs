@@ -45,34 +45,35 @@ fn doit(file: &str) -> io::Result<()> {
                                mag, MAG)));
     }
 
-    let (header, symbol_table) = try!(next_file(&mut f)).unwrap();
+    let (off, header, symbol_table) = try!(next_file(&mut f)).unwrap();
     let symbol_table = if header.name == *b"/               " {
         Some(try!(build_symbol_table(&symbol_table)))
     } else {
-        try!(print(&header, &symbol_table, None, None));
+        try!(print(off, &header, &symbol_table, None, None));
         None
     };
 
-    let (header, filename_table) = match try!(next_file(&mut f)) {
+    let (off, header, filename_table) = match try!(next_file(&mut f)) {
         Some(pair) => pair, None => return Ok(()),
     };
     let filename_table = if header.name == *b"//              " {
         Some(filename_table)
     } else {
-        try!(print(&header, &filename_table, symbol_table.as_ref(), None));
+        try!(print(off, &header, &filename_table, symbol_table.as_ref(), None));
         None
     };
 
-    while let Some((header, contents)) = try!(next_file(&mut f)) {
-        try!(print(&header, &contents, symbol_table.as_ref(),
+    while let Some((off, header, contents)) = try!(next_file(&mut f)) {
+        try!(print(off, &header, &contents, symbol_table.as_ref(),
                    filename_table.as_ref()));
     }
     Ok(())
 }
 
-fn print(header: &Header,
+fn print(offset: u32,
+         header: &Header,
          contents: &[u8],
-         _symbol_table: Option<&HashMap<&str, Vec<u32>>>,
+         symbol_table: Option<&HashMap<&str, Vec<u32>>>,
          filename_table: Option<&Vec<u8>>) -> io::Result<()> {
     if header.name[0] == b'/' && filename_table.is_some() {
         let offset = match str::from_utf8(&header.name[1..]).ok()
@@ -95,6 +96,15 @@ fn print(header: &Header,
     print("mode", &header.mode);
     print("size", &header.size);
 
+    if let Some(symbol_table) = symbol_table {
+        println!("symbols within: ");
+        for (k, v) in symbol_table.iter() {
+            if v.contains(&offset) {
+                println!("  {}", k);
+            }
+        }
+    }
+
     print!("contents: ");
     match str::from_utf8(contents) {
         Ok(s) => println!("\n\t{}", s.replace("\n", "\n\t")),
@@ -112,8 +122,9 @@ fn print(header: &Header,
     }
 }
 
-fn next_file(f: &mut File) -> io::Result<Option<(Header, Vec<u8>)>> {
+fn next_file(f: &mut File) -> io::Result<Option<(u32, Header, Vec<u8>)>> {
     let mut header: Header = unsafe { mem::zeroed() };
+    let offset = try!(f.seek(SeekFrom::Current(0))) as u32;
     if !try!(read_all(f, header.as_mut_bytes())) {
         return Ok(None)
     }
@@ -138,7 +149,7 @@ fn next_file(f: &mut File) -> io::Result<Option<(Header, Vec<u8>)>> {
     if contents.len() % 2 == 1 {
         try!(f.seek(SeekFrom::Current(1)));
     }
-    Ok(Some((header, contents)))
+    Ok(Some((offset as u32, header, contents)))
 }
 
 fn bad(s: String) -> io::Error {
