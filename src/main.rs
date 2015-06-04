@@ -95,7 +95,7 @@ fn doit(file: &str) -> io::Result<()> {
             return Err(bad(format!("archive is truncated")))
         }
 
-        println!("contents: ");
+        print!("contents: ");
         match str::from_utf8(&contents) {
             Ok(s) => println!("\n\t{}", s.replace("\n", "\n\t")),
             Err(..) => println!("<binary>"),
