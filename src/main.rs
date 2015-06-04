@@ -47,6 +47,7 @@ fn doit(file: &str) -> io::Result<()> {
 
     let (off, header, symbol_table) = try!(next_file(&mut f)).unwrap();
     let symbol_table = if header.name == *b"/               " {
+        println!(">> parsing symbol table");
         Some(try!(build_symbol_table(&symbol_table)))
     } else {
         try!(print(off, &header, &symbol_table, None, None));
@@ -57,6 +58,7 @@ fn doit(file: &str) -> io::Result<()> {
         Some(pair) => pair, None => return Ok(()),
     };
     let filename_table = if header.name == *b"//              " {
+        println!(">> parsing filename table");
         Some(filename_table)
     } else {
         try!(print(off, &header, &filename_table, symbol_table.as_ref(), None));
