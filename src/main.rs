@@ -77,6 +77,7 @@ fn print(offset: u32,
          contents: &[u8],
          symbol_table: Option<&HashMap<&str, Vec<u32>>>,
          filename_table: Option<&Vec<u8>>) -> io::Result<()> {
+    println!("offset: {}", offset);
     if header.name[0] == b'/' && filename_table.is_some() {
         let offset = match str::from_utf8(&header.name[1..]).ok()
                               .and_then(|s| s.trim().parse().ok()) {
