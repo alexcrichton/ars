@@ -1,3 +1,6 @@
+// MSVC .lib specs:
+// http://kishorekumar.net/pecoff_v8.1.htm
+
 use std::collections::HashMap;
 use std::env;
 use std::error::Error;
