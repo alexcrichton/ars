@@ -2,7 +2,7 @@ use std::env;
 use std::error::Error;
 use std::fs::File;
 use std::io::prelude::*;
-use std::io::{self, SeekFrom};
+use std::io;
 use std::mem;
 use std::slice;
 use std::str;
@@ -88,7 +88,19 @@ fn doit(file: &str) -> io::Result<()> {
             Ok(n) => n,
             Err(..) => return Err(bad(format!("size field not a number: {}", s)))
         };
-        try!(f.seek(SeekFrom::Current(n)));
+
+        let mut contents = Vec::new();
+        try!((&mut f).take(n).read_to_end(&mut contents));
+        if contents.len() != n as usize {
+            return Err(bad(format!("archive is truncated")))
+        }
+
+        println!("contents: ");
+        match str::from_utf8(&contents) {
+            Ok(s) => println!("\n\t{}", s.replace("\n", "\n\t")),
+            Err(..) => println!("<binary>"),
+        }
+        println!("------------------------");
     }
     Ok(())
 }
