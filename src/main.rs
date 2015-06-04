@@ -98,6 +98,7 @@ fn doit(file: &str) -> io::Result<()> {
         print!("contents: ");
         match str::from_utf8(&contents) {
             Ok(s) => println!("\n\t{}", s.replace("\n", "\n\t")),
+            Err(..) if contents.len() < 100 => println!("{:?}", contents),
             Err(..) => println!("<binary>"),
         }
         println!("------------------------");
