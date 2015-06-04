@@ -1,30 +1,12 @@
+use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use std::fs::File;
 use std::io::prelude::*;
-use std::io;
+use std::io::{self, SeekFrom};
 use std::mem;
 use std::slice;
 use std::str;
-
-/*
-#define ARMAG   "!<arch>\n" /* String that begins an archive file.  */
-#define SARMAG  8       /* Size of that string.  */
-
-#define ARFMAG  "`\n"       /* String in ar_fmag at end of each header.  */
-
-__BEGIN_DECLS
-
-struct ar_hdr
-  {
-    char ar_name[16];       /* Member file name, sometimes / terminated. */
-    char ar_date[12];       /* File date, decimal seconds since Epoch.  */
-    char ar_uid[6], ar_gid[6];  /* User and group IDs, in ASCII decimal.  */
-    char ar_mode[8];        /* File mode, in ASCII octal.  */
-    char ar_size[10];       /* File size, in ASCII decimal.  */
-    char ar_fmag[2];        /* Always contains ARFMAG.  */
-  };
-*/
 
 const MAG: [u8; 8] = *b"!<arch>\n";
 const FMAG: [u8; 2] = *b"`\n";
@@ -62,55 +44,101 @@ fn doit(file: &str) -> io::Result<()> {
         return Err(bad(format!("invalid magic, found {:?} expected {:?}",
                                mag, MAG)));
     }
-    let mut header: Header = unsafe { mem::zeroed() };
-    loop {
-        if !try!(read_all(&mut f, header.as_mut_bytes())) {
-            break
-        }
-        if header.fmag != FMAG {
-            return Err(bad(format!("invalid file magic, found {:?} \
-                                    expected {:?}", header.fmag, FMAG)))
-        }
 
-        print("name", &header.name);
-        print("date", &header.date);
-        print(" uid", &header.uid);
-        print(" gid", &header.gid);
-        print("mode", &header.mode);
-        print("size", &header.size);
+    let (header, symbol_table) = try!(next_file(&mut f)).unwrap();
+    let symbol_table = if header.name == *b"/               " {
+        Some(try!(build_symbol_table(&symbol_table)))
+    } else {
+        try!(print(&header, &symbol_table, None, None));
+        None
+    };
 
-        let s = match str::from_utf8(&header.size) {
-            Ok(s) => s,
-            Err(..) => return Err(bad(format!("size field is not utf-8: {:?}",
-                                              header.size))),
-        };
-        let n = match s.trim().parse() {
-            Ok(n) => n,
-            Err(..) => return Err(bad(format!("size field not a number: {}", s)))
-        };
+    let (header, filename_table) = match try!(next_file(&mut f)) {
+        Some(pair) => pair, None => return Ok(()),
+    };
+    let filename_table = if header.name == *b"//              " {
+        Some(filename_table)
+    } else {
+        try!(print(&header, &filename_table, symbol_table.as_ref(), None));
+        None
+    };
 
-        let mut contents = Vec::new();
-        try!((&mut f).take(n).read_to_end(&mut contents));
-        if contents.len() != n as usize {
-            return Err(bad(format!("archive is truncated")))
-        }
-
-        print!("contents: ");
-        match str::from_utf8(&contents) {
-            Ok(s) => println!("\n\t{}", s.replace("\n", "\n\t")),
-            Err(..) if contents.len() < 100 => println!("{:?}", contents),
-            Err(..) => println!("<binary>"),
-        }
-        println!("------------------------");
+    while let Some((header, contents)) = try!(next_file(&mut f)) {
+        try!(print(&header, &contents, symbol_table.as_ref(),
+                   filename_table.as_ref()));
     }
     Ok(())
 }
 
-fn print(field: &str, arr: &[u8]) {
-    match str::from_utf8(arr) {
-        Ok(s) => println!("{}: {:>15}", field, s.trim()),
-        Err(..) => println!("{}: <bytes>{:?}", field, arr),
+fn print(header: &Header,
+         contents: &[u8],
+         _symbol_table: Option<&HashMap<&str, Vec<u32>>>,
+         filename_table: Option<&Vec<u8>>) -> io::Result<()> {
+    if header.name[0] == b'/' && filename_table.is_some() {
+        let offset = match str::from_utf8(&header.name[1..]).ok()
+                              .and_then(|s| s.trim().parse().ok()) {
+            Some(offset) => offset,
+            None => return Err(bad(format!("invalid non-numeric filename"))),
+        };
+        let filename = &filename_table.unwrap()[offset..];
+        let end = match filename.iter().position(|i| *i == b'\n') {
+            Some(offset) => offset,
+            None => return Err(bad(format!("filename table not terminated right"))),
+        };
+        print("name", &filename[..end]);
+    } else {
+        print("name", &header.name);
     }
+    print("date", &header.date);
+    print(" uid", &header.uid);
+    print(" gid", &header.gid);
+    print("mode", &header.mode);
+    print("size", &header.size);
+
+    print!("contents: ");
+    match str::from_utf8(contents) {
+        Ok(s) => println!("\n\t{}", s.replace("\n", "\n\t")),
+        Err(..) if contents.len() < 100 => println!("{:?}", contents),
+        Err(..) => println!("<binary>"),
+    }
+    println!("------------------------");
+    return Ok(());
+
+    fn print(field: &str, arr: &[u8]) {
+        match str::from_utf8(arr) {
+            Ok(s) => println!("{}: {:>15}", field, s.trim()),
+            Err(..) => println!("{}: <bytes>{:?}", field, arr),
+        }
+    }
+}
+
+fn next_file(f: &mut File) -> io::Result<Option<(Header, Vec<u8>)>> {
+    let mut header: Header = unsafe { mem::zeroed() };
+    if !try!(read_all(f, header.as_mut_bytes())) {
+        return Ok(None)
+    }
+    if header.fmag != FMAG {
+        return Err(bad(format!("invalid file magic, found {:?} \
+                                expected {:?}", header.fmag, FMAG)))
+    }
+
+    let n = match str::from_utf8(&header.size).ok()
+                     .and_then(|s| s.trim().parse().ok()) {
+        Some(n) => n,
+        None => return Err(bad(format!("size field not a number: {:?}",
+                                       header.size)))
+    };
+
+    let mut contents = Vec::new();
+    try!(f.take(n).read_to_end(&mut contents));
+    if contents.len() != n as usize {
+        return Err(bad(format!("archive is truncated")))
+    }
+
+    if contents.len() % 2 == 1 {
+        try!(f.seek(SeekFrom::Current(1)));
+    }
+    Ok(Some((header, contents)))
 }
 
 fn bad(s: String) -> io::Error {
@@ -128,4 +156,36 @@ fn read_all(r: &mut Read, mut buf: &mut [u8]) -> io::Result<bool> {
         }
     }
     Ok(true)
+}
+
+fn build_symbol_table(mut contents: &[u8]) -> io::Result<HashMap<&str, Vec<u32>>> {
+    let mut m = HashMap::new();
+    let nsyms = try!(read_u32(&mut contents)) as usize;
+    let (mut offsets, mut names) = contents.split_at(nsyms * 4);
+    for _ in 0..nsyms {
+        let nul_byte = match names.iter().position(|x| *x == 0) {
+            Some(i) => i,
+            None => return Err(bad(format!("invalid symbol table"))),
+        };
+        let name = match str::from_utf8(&names[..nul_byte]) {
+            Ok(s) => s,
+            Err(..) => return Err(bad(format!("symbol was not valid utf-8"))),
+        };
+        names = &names[nul_byte + 1..];
+        let offset = try!(read_u32(&mut offsets));
+        m.entry(name).or_insert(Vec::new()).push(offset);
+    }
+    Ok(m)
+}
+
+fn read_u32(arr: &mut &[u8]) -> io::Result<u32> {
+    if arr.len() < 4 {
+        return Err(bad(format!("symbol table needs to be at least 4 bytes")))
+    }
+    let ret = ((arr[0] as u32) << 24) |
+              ((arr[1] as u32) << 16) |
+              ((arr[2] as u32) <<  8) |
+              ((arr[3] as u32) <<  0);
+    *arr = &arr[4..];
+    Ok(ret)
 }
