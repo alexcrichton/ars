@@ -74,8 +74,8 @@ fn doit(file: &str) -> io::Result<()> {
 
         print("name", &header.name);
         print("date", &header.date);
-        print("uid", &header.uid);
-        print("gid", &header.gid);
+        print(" uid", &header.uid);
+        print(" gid", &header.gid);
         print("mode", &header.mode);
         print("size", &header.size);
 
