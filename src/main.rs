@@ -36,7 +36,13 @@ impl Header {
 
 fn main() {
     let mut args = env::args();
-    doit(&args.nth(1).unwrap()).unwrap();
+    match doit(&args.nth(1).unwrap()) {
+        Ok(()) => {}
+        Err(e) => {
+            println!("fatal: bad archive: {}", e);
+            std::process::exit(1);
+        }
+    }
 }
 
 fn doit(file: &str) -> io::Result<()> {
@@ -57,8 +63,18 @@ fn doit(file: &str) -> io::Result<()> {
         None
     };
 
-    let (off, header, filename_table) = match try!(next_file(&mut f)) {
+    let (mut off, mut header, mut filename_table) = match try!(next_file(&mut f)) {
         Some(pair) => pair, None => return Ok(()),
+    };
+    if header.name == *b"/               " {
+        println!(">> ignoring MSVC symbol table");
+        let (a, b, c) = match try!(next_file(&mut f)) {
+            Some(pair) => pair,
+            None => return Ok(()),
+        };
+        off = a;
+        header = b;
+        filename_table = c;
     };
     let filename_table = if header.name == *b"//              " {
         println!(">> parsing filename table");
@@ -87,8 +103,18 @@ fn print(offset: u32,
             Some(offset) => offset,
             None => return Err(bad(format!("invalid non-numeric filename"))),
         };
-        let filename = &filename_table.unwrap()[offset..];
-        let end = match filename.iter().position(|i| *i == b'\n') {
+        let filename = match filename_table {
+            Some(table) if offset < table.len() => &table[offset..],
+            Some(table) => {
+                return Err(bad(format!("offset is {} but filename table has \
+                                        {} bytes:\n{}",
+                                       offset, table.len(),
+                                       String::from_utf8_lossy(table))))
+            }
+            None => return Err(bad(format!("filename table doesn't exist"))),
+        };
+        // \n for GNU, 0 for MSVC
+        let end = match filename.iter().position(|i| *i == b'\n' || *i == 0) {
             Some(offset) => offset,
             None => return Err(bad(format!("filename table not terminated right"))),
         };
